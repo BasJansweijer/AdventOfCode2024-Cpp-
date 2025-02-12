@@ -1,7 +1,9 @@
 #include <string>
 #include <iostream>
 #include <fstream>
+#include <vector>
 #include <sstream>
+#include <algorithm>
 
 class StringGrid
 {
@@ -19,6 +21,10 @@ class StringGrid
 
         GridPos operator + (const GridPos& other) {
             return GridPos(row + other.row, col + other.col);
+        }
+
+        GridPos operator - (const GridPos& other) {
+            return GridPos(row - other.row, col - other.col);
         }
 
         bool operator == (const GridPos& other) {
@@ -87,7 +93,6 @@ class StringGrid
         // We skip the provided start
         int startIdx = getIndex({startAfter.row, startAfter.col}) + 1;
         int found = content.find(c, startIdx);
-        std::cout << startIdx << ',' << found << std::endl;
         if (found == std::string::npos) {
             return {-1, -1};
         }
@@ -106,34 +111,69 @@ class StringGrid
 };
 
 bool moveLegal(const StringGrid& field, StringGrid::GridPos robotPos, const StringGrid::GridPos& move) {
-
     StringGrid::GridPos curPos = robotPos + move;
 
-    while (field.read(curPos) == 'O') {
+    char curVal = field.read(curPos);
+
+    while (curVal == 'O' || curVal == '[' || curVal == ']') {
+
+        if (curVal == '[' && move.row != 0) 
+        {
+            StringGrid::GridPos otherBoxPos = curPos;
+            otherBoxPos.col += 1;
+            if (!moveLegal(field, otherBoxPos, move)) return false;
+        }
+        else if (curVal == ']' && move.row != 0)
+        {
+            StringGrid::GridPos otherBoxPos = curPos;
+            otherBoxPos.col -= 1;
+            if (!moveLegal(field, otherBoxPos, move)) return false;
+        }
+        
         curPos += move;
+        curVal = field.read(curPos);
     }
 
-    return field.read(curPos) != '#';
+    return curVal != '#';
 }
 
-void makeMove(StringGrid& field, StringGrid::GridPos& robotPos, const StringGrid::GridPos& move) {
+
+void makeMove(StringGrid& field, StringGrid::GridPos& robotPos, const StringGrid::GridPos& move, StringGrid& pushed) {
+    char moving_value = field.read(robotPos);
     field.set(robotPos, '.');
     robotPos += move;
 
     StringGrid::GridPos curPos = robotPos;
-    char moving_value = '@';
     char old_value;
 
     do {
         // update the current field
         old_value = field.read(curPos);
         field.set(curPos, moving_value);
+        
+        if (old_value == '[' && move.row != 0)
+        {
+            StringGrid::GridPos otherBoxPos = curPos;
+            otherBoxPos.col += 1;
+            if (pushed.read(otherBoxPos) != 'Y') {
+                makeMove(field, otherBoxPos, move, pushed);
+            }
+        }
+        else if (old_value == ']' && move.row != 0)
+        {
+            StringGrid::GridPos otherBoxPos = curPos;
+            otherBoxPos.col -= 1;
+            if (pushed.read(otherBoxPos) != 'Y') {
+                makeMove(field, otherBoxPos, move, pushed);
+            }
+        }
 
         // move on and replace the next field
+        pushed.set(curPos, 'Y');
         curPos += move;
         moving_value = old_value;
     }
-    while ((moving_value = old_value) == 'O');
+    while ((moving_value = old_value) == 'O' || moving_value == '[' || moving_value == ']');
 }
 
 StringGrid::GridPos decodeMove(char move) {
@@ -149,29 +189,98 @@ StringGrid::GridPos decodeMove(char move) {
 
 }
 
+int countSubstringOccurrences(const std::string& str, const std::string& sub) {
+    int count = 0;
+    size_t pos = 0;
+
+    // Loop to find all occurrences of the substring
+    while ((pos = str.find(sub, pos)) != std::string::npos) {
+        count++;
+        pos += sub.length();  // Move past the last found substring
+    }
+
+    return count;
+}
+
+
+bool isInvalid(const StringGrid& field) {
+    for (int c=0; c < field.width; c++) {
+        if (field.read({0, c}) != '#') {
+            return true;
+        }
+    }
+    std::string s = field.str();
+    int countWhole = countSubstringOccurrences(s, "[]");
+
+    int countR = countSubstringOccurrences(s, "]");
+
+    int countL = countSubstringOccurrences(s, "[");
+
+    return countWhole != countL || countL != countR;
+
+}
+
 void performMovements(StringGrid& field, std::string_view instructions) {
     StringGrid::GridPos robotPos = field.find('@');
+
+    int i = 0;
 
     for (char c : instructions) {
         StringGrid::GridPos move = decodeMove(c);
         if (moveLegal(field, robotPos, move)) {
-            makeMove(field, robotPos, move);
+            StringGrid pushed = field;
+            makeMove(field, robotPos, move, pushed);
+            if (isInvalid(field)) {
+                field.print();
+                std::cout << i << std::endl;
+                break;
+            }
+            i++;
         }
     }
 }
 
-int calcBoxScores(const StringGrid& grid) {
-    int totalScore = 0;
+int64_t calcBoxScores(const StringGrid& grid, char boxChar) {
+    int64_t totalScore = 0;
     StringGrid::GridPos lastFound = {0, -1};
-    lastFound = grid.find('O', lastFound);
-    std::cout << lastFound.row << ',' << lastFound.col << std::endl;
+    lastFound = grid.find(boxChar, lastFound);
     while (lastFound != StringGrid::GridPos(-1, -1)) 
     {
         totalScore += lastFound.row * 100 + lastFound.col;
-        lastFound = grid.find('O', lastFound);
+        lastFound = grid.find(boxChar, lastFound);
     }
 
     return totalScore;
+}
+
+StringGrid makeWideBoard(const StringGrid& normalField) {
+    StringGrid wideBoard(normalField.width * 2, normalField.height);
+    for (int r=0; r < normalField.height; r++)
+    {
+        for (int c=0; c < normalField.width; c++)
+        {
+            char square = normalField.read({r, c});
+            if (square == 'O') 
+            {
+                wideBoard.set({r, c*2}, '[');
+                wideBoard.set({r, c*2 + 1}, ']');
+
+            } 
+            else if (square == '@')
+            {
+                wideBoard.set({r, c*2}, square);
+                wideBoard.set({r, c*2 + 1}, '.');
+            }
+            else 
+            {
+                wideBoard.set({r, c*2}, square);
+                wideBoard.set({r, c*2 + 1}, square);
+            }
+
+        }
+    }
+
+    return wideBoard;
 }
 
 int main() {
@@ -204,10 +313,16 @@ int main() {
     }
 
     StringGrid grid(std::move(field));
-    performMovements(grid, moveInstructions);
+    StringGrid gridPart2 = makeWideBoard(grid);
 
-    grid.print();
+    // performMovements(grid, moveInstructions);
 
-    std::cout << calcBoxScores(grid) << std::endl;
+    std::cout << calcBoxScores(grid, 'O') << std::endl;
+
+    performMovements(gridPart2, moveInstructions);
+
+    gridPart2.print();
+
+    std::cout << calcBoxScores(gridPart2, '[') << std::endl;
 
 }
